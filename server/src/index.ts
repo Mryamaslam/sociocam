@@ -17,6 +17,13 @@ import { audit } from "./auditLog.js";
 import { env } from "./env.js";
 
 const app = express();
+// Render (like Heroku/most PaaS) puts one reverse-proxy hop in front of this process and forwards
+// the real client IP via X-Forwarded-For. Express ignores that header by default — a safety default,
+// since blindly trusting it would let a client spoof its own IP to dodge rate limits — which left
+// every request logged as the proxy's own loopback address and every user sharing one rate-limit
+// bucket. Trusting exactly one hop (Render's edge proxy, not an arbitrary chain a client could
+// extend) fixes both without reopening that spoofing risk.
+app.set("trust proxy", 1);
 app.use(helmet());
 app.use(cors({ origin: env.corsOrigin }));
 app.use(express.json({ limit: "16kb" })); // every real body here (auth, profile, game-result) is tiny
