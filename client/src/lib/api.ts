@@ -36,7 +36,16 @@ async function requestJson<T>(method: string, path: string, body: unknown, token
     },
     body: JSON.stringify(body),
   });
-  const data = await res.json();
+  // A free-tier host that's asleep can have its gateway return an HTML timeout/error page instead
+  // of proxying through to the app — res.json() would throw a raw "Unexpected token '<'" in that
+  // case, which reads as a broken app rather than what it actually is: the backend waking up.
+  const text = await res.text();
+  let data: any;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error("Couldn't reach the server — it may still be waking up. Please try again in a moment.");
+  }
   if (!res.ok) throw new Error(data.error ?? "Request failed");
   return data as T;
 }
@@ -85,7 +94,7 @@ export function uploadAvatar(token: string, file: File, onProgress?: (fraction: 
       try {
         data = JSON.parse(xhr.responseText);
       } catch {
-        reject(new Error("Server returned an unexpected response"));
+        reject(new Error("Couldn't reach the server — it may still be waking up. Please try again in a moment."));
         return;
       }
       if (xhr.status >= 200 && xhr.status < 300) resolve(data);
