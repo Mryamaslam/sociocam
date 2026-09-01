@@ -4,7 +4,11 @@ services:
     runtime: node
     plan: free
     rootDir: .
-    buildCommand: npm install && npm run build:server
+    # --include=dev is required here: Render also applies NODE_ENV=production (set below) during
+    # the build step, which makes npm skip devDependencies by default — but the @types/* packages
+    # tsc needs to compile server/src live in devDependencies, so a plain `npm install` silently
+    # leaves them out and every import fails with "Could not find a declaration file".
+    buildCommand: npm install --include=dev && npm run build:server
     startCommand: npm run start:server
     envVars:
       - key: NODE_ENV
