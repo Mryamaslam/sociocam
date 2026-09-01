@@ -1,24 +1,33 @@
 import { Router } from "express";
+import { randomUUID } from "crypto";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { createUser, findByUsername, publicProfile } from "./userStore.js";
+import { env } from "./env.js";
+import { validate, registerSchema, loginSchema } from "./validation.js";
+import { audit } from "./auditLog.js";
+import { isRevoked, revokeToken } from "./tokenRevocation.js";
 
-const JWT_SECRET = process.env.JWT_SECRET ?? "dev-secret-change-in-production";
-const TOKEN_TTL = "30d";
-
-export const AVATAR_COLORS = ["#4f9dde", "#de6f4f", "#6fde8a", "#c76fde", "#dede6f", "#de6f9e"];
+const TOKEN_TTL_SEC = 7 * 24 * 60 * 60; // 7 days — see README "Known gaps" for why this isn't a
+// separate short-lived-access + refresh-token pair: a revocable jti gives the meaningful
+// property (logout actually invalidates the token) without a second token subsystem's worth of
+// surface area for a Phase A validation build.
 
 export interface AuthPayload {
   sub: string;
+  jti: string;
+  exp: number;
 }
 
 export function signToken(userId: string): string {
-  return jwt.sign({ sub: userId } satisfies AuthPayload, JWT_SECRET, { expiresIn: TOKEN_TTL });
+  return jwt.sign({ sub: userId, jti: randomUUID() }, env.jwtSecret, { expiresIn: TOKEN_TTL_SEC });
 }
 
 export function verifyToken(token: string): AuthPayload | null {
   try {
-    return jwt.verify(token, JWT_SECRET) as AuthPayload;
+    const payload = jwt.verify(token, env.jwtSecret) as AuthPayload;
+    if (payload.jti && isRevoked(payload.jti)) return null;
+    return payload;
   } catch {
     return null;
   }
@@ -27,33 +36,50 @@ export function verifyToken(token: string): AuthPayload | null {
 export const authRouter = Router();
 
 authRouter.post("/register", async (req, res) => {
-  const { username, password, displayName, avatarColor } = req.body ?? {};
-  if (typeof username !== "string" || username.trim().length < 3) {
-    return res.status(400).json({ error: "Username must be at least 3 characters" });
+  const parsed = validate(registerSchema, req.body);
+  if (!parsed.ok) {
+    audit("register-rejected", { reason: parsed.error, ip: req.ip });
+    return res.status(400).json({ error: parsed.error });
   }
-  if (typeof password !== "string" || password.length < 6) {
-    return res.status(400).json({ error: "Password must be at least 6 characters" });
-  }
+  const { username, password, displayName, avatarConfig } = parsed.data;
   if (findByUsername(username)) {
+    audit("register-rejected", { reason: "username taken", ip: req.ip });
     return res.status(409).json({ error: "Username already taken" });
   }
   const passwordHash = await bcrypt.hash(password, 10);
   const user = createUser({
-    username: username.trim(),
+    username,
     passwordHash,
-    displayName: typeof displayName === "string" && displayName.trim() ? displayName.trim() : username.trim(),
-    avatarColor: AVATAR_COLORS.includes(avatarColor) ? avatarColor : AVATAR_COLORS[0],
+    displayName: displayName ?? username,
+    avatarConfig,
   });
+  audit("register", { userId: user.id, ip: req.ip });
   const token = signToken(user.id);
   res.json({ token, profile: publicProfile(user) });
 });
 
 authRouter.post("/login", async (req, res) => {
-  const { username, password } = req.body ?? {};
-  const user = typeof username === "string" ? findByUsername(username) : undefined;
-  if (!user) return res.status(401).json({ error: "Invalid username or password" });
-  const valid = await bcrypt.compare(String(password ?? ""), user.passwordHash);
-  if (!valid) return res.status(401).json({ error: "Invalid username or password" });
+  const parsed = validate(loginSchema, req.body);
+  if (!parsed.ok) return res.status(400).json({ error: parsed.error });
+  const { username, password } = parsed.data;
+  const user = findByUsername(username);
+  const valid = user ? await bcrypt.compare(password, user.passwordHash) : false;
+  if (!user || !valid) {
+    audit("login-failed", { username, ip: req.ip });
+    return res.status(401).json({ error: "Invalid username or password" });
+  }
+  audit("login-success", { userId: user.id, ip: req.ip });
   const token = signToken(user.id);
   res.json({ token, profile: publicProfile(user) });
+});
+
+authRouter.post("/logout", (req, res) => {
+  const header = req.headers.authorization;
+  const token = header?.startsWith("Bearer ") ? header.slice(7) : null;
+  const payload = token ? verifyToken(token) : null;
+  if (payload) {
+    revokeToken(payload.jti, payload.exp * 1000);
+    audit("logout", { userId: payload.sub });
+  }
+  res.json({ ok: true });
 });

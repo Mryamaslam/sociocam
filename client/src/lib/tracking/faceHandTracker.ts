@@ -6,6 +6,10 @@ import {
   type NormalizedLandmark,
 } from "@mediapipe/tasks-vision";
 import type { FaceState, HandState, PoseState, TrackingFrame } from "../../types/tracking";
+import { blendshapeScore, clamp01, type BlendshapeCategory } from "./blendshapeUtils";
+import { ExpressionStabilizer } from "./expressionClassifier";
+import { HandGestureClassifier } from "./handGestureClassifier";
+import { MovementEnergyTracker } from "./movementEnergy";
 
 const WASM_BASE = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.20/wasm";
 const FACE_MODEL_URL =
@@ -14,14 +18,6 @@ const HAND_MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
 const POSE_MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
-
-function clamp01(v: number): number {
-  return Math.min(1, Math.max(0, v));
-}
-
-function blendshapeScore(categories: { categoryName: string; score: number }[], name: string): number {
-  return categories.find((c) => c.categoryName === name)?.score ?? 0;
-}
 
 function dist(a: NormalizedLandmark, b: NormalizedLandmark): number {
   return Math.hypot(a.x - b.x, a.y - b.y, (a.z ?? 0) - (b.z ?? 0));
@@ -35,14 +31,25 @@ function fingerCurl(landmarks: NormalizedLandmark[], mcpIdx: number, tipIdx: num
   return clamp01(1 - tipDist / (mcpDist * 2.2));
 }
 
-function handStateFromLandmarks(landmarks: NormalizedLandmark[]): HandState {
+function buildHandState(landmarks: NormalizedLandmark[], classifier: HandGestureClassifier, now: number): HandState {
   const wrist = landmarks[0];
-  const curls = [fingerCurl(landmarks, 5, 8), fingerCurl(landmarks, 9, 12), fingerCurl(landmarks, 13, 16), fingerCurl(landmarks, 17, 20)];
-  const curl = curls.reduce((a, b) => a + b, 0) / curls.length;
+  const fingerCurlValues = {
+    index: fingerCurl(landmarks, 5, 8),
+    middle: fingerCurl(landmarks, 9, 12),
+    ring: fingerCurl(landmarks, 13, 16),
+    pinky: fingerCurl(landmarks, 17, 20),
+  };
+  const curl = (fingerCurlValues.index + fingerCurlValues.middle + fingerCurlValues.ring + fingerCurlValues.pinky) / 4;
+  const gesture = classifier.update(
+    { present: true, wristX: wrist.x, wristY: wrist.y, fingerCurl: fingerCurlValues, avgCurl: curl },
+    now
+  );
   return {
     present: true,
     wrist: { x: wrist.x, y: wrist.y, z: wrist.z ?? 0 },
     curl,
+    fingerCurl: fingerCurlValues,
+    gesture,
   };
 }
 
@@ -81,6 +88,10 @@ export class FaceHandTracker {
   private rafId: number | null = null;
   private lastVideoTime = -1;
   private disposed = false;
+  private expressionStabilizer = new ExpressionStabilizer();
+  private leftHandGesture = new HandGestureClassifier();
+  private rightHandGesture = new HandGestureClassifier();
+  private movementEnergyTracker = new MovementEnergyTracker();
 
   async init(onStatus?: (status: TrackerStatus) => void): Promise<void> {
     onStatus?.("loading");
@@ -124,12 +135,15 @@ export class FaceHandTracker {
       const faceResult = this.faceLandmarker.detectForVideo(video, now);
       const handResult = this.handLandmarker.detectForVideo(video, now);
       const poseResult = this.poseLandmarker.detectForVideo(video, now);
+      const blendshapeCategories = faceResult.faceBlendshapes?.[0]?.categories ?? null;
 
       const frame: TrackingFrame = {
-        face: this.extractFace(faceResult),
+        face: this.extractFace(faceResult, blendshapeCategories),
+        expression: this.expressionStabilizer.update(blendshapeCategories, now),
         leftHand: null,
         rightHand: null,
         pose: poseResult.landmarks?.[0] ? poseStateFromLandmarks(poseResult.landmarks[0]) : null,
+        movementEnergy: 0,
         timestamp: now,
       };
 
@@ -137,18 +151,24 @@ export class FaceHandTracker {
         const label = handedness[0]?.categoryName; // "Left" | "Right" (mirrored: camera view)
         const landmarks = handResult.landmarks[i];
         if (!landmarks) return;
-        const state = handStateFromLandmarks(landmarks);
-        if (label === "Left") frame.rightHand = state; // mirror for selfie view
-        else frame.leftHand = state;
+        if (label === "Left") {
+          frame.rightHand = buildHandState(landmarks, this.rightHandGesture, now); // mirror for selfie view
+        } else {
+          frame.leftHand = buildHandState(landmarks, this.leftHandGesture, now);
+        }
       });
+
+      // Prefer the right hand as "the carrying hand" for movement energy — arbitrary but
+      // consistent; falls back to the left hand, or decays toward stillness if neither is present.
+      const activeHand = frame.rightHand ?? frame.leftHand;
+      frame.movementEnergy = this.movementEnergyTracker.update(activeHand?.wrist.x ?? null, activeHand?.wrist.y ?? null, now);
 
       onFrame(frame);
     };
     this.rafId = requestAnimationFrame(loop);
   }
 
-  private extractFace(result: ReturnType<FaceLandmarker["detectForVideo"]>): FaceState | null {
-    const blendshapes = result.faceBlendshapes?.[0]?.categories;
+  private extractFace(result: ReturnType<FaceLandmarker["detectForVideo"]>, blendshapes: BlendshapeCategory[] | null): FaceState | null {
     if (!blendshapes) return null;
 
     const jawOpen = blendshapeScore(blendshapes, "jawOpen");

@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { login, register } from "../lib/api";
 import { useAuthStore } from "../state/authStore";
-
-const AVATAR_COLORS = ["#4f9dde", "#de6f4f", "#6fde8a", "#c76fde", "#dede6f", "#de6f9e"];
+import { AvatarCustomizer } from "./AvatarCustomizer";
+import { DEFAULT_AVATAR_CONFIG, type AvatarConfig } from "../avatar/avatarOptions";
 
 export function AuthScreen() {
   const setSession = useAuthStore((s) => s.setSession);
@@ -10,7 +10,7 @@ export function AuthScreen() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
-  const [avatarColor, setAvatarColor] = useState(AVATAR_COLORS[0]);
+  const [avatarConfig, setAvatarConfig] = useState<AvatarConfig>(DEFAULT_AVATAR_CONFIG);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -21,7 +21,7 @@ export function AuthScreen() {
       const result =
         mode === "login"
           ? await login({ username, password })
-          : await register({ username, password, displayName: displayName || username, avatarColor });
+          : await register({ username, password, displayName: displayName || username, avatarConfig });
       setSession(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
@@ -40,35 +40,34 @@ export function AuthScreen() {
         <input placeholder="Password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
 
         {mode === "register" && (
-          <>
-            <input
-              placeholder="Display name (shown to your friend)"
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-            />
-            <div className="color-picker">
-              {AVATAR_COLORS.map((color) => (
-                <button
-                  key={color}
-                  className={`color-swatch${avatarColor === color ? " color-swatch--selected" : ""}`}
-                  style={{ background: color }}
-                  onClick={() => setAvatarColor(color)}
-                  aria-label={`Choose avatar color ${color}`}
-                />
-              ))}
-            </div>
-          </>
+          <input
+            placeholder="Display name (shown to your friend)"
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+          />
         )}
 
-        <button disabled={busy || !username || !password} onClick={submit}>
-          {mode === "login" ? "Log in" : "Create account"}
-        </button>
+        {mode === "login" && (
+          <button disabled={busy || !username || !password} onClick={submit}>
+            Log in
+          </button>
+        )}
         {error && <p className="lobby__error">{error}</p>}
 
         <button className="link-button" onClick={() => setMode(mode === "login" ? "register" : "login")}>
           {mode === "login" ? "New here? Create an account" : "Already have an account? Log in"}
         </button>
       </div>
+
+      {mode === "register" && (
+        <>
+          <AvatarCustomizer value={avatarConfig} onChange={setAvatarConfig} />
+          <button disabled={busy || !username || !password} onClick={submit}>
+            Create account
+          </button>
+          {error && <p className="lobby__error">{error}</p>}
+        </>
+      )}
     </div>
   );
 }

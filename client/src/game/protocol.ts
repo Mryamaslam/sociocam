@@ -11,10 +11,15 @@ export const GESTURE_LABELS: Record<GestureKind, string> = {
   "hold-hands": "Both: Reach out and hold hands!",
 };
 
+export type VasePhase = "idle" | "carrying" | "success" | "broken";
+
 export type GameMessage =
   | { type: "round-start"; roundIndex: number; totalRounds: number; gesture: GestureKind; deadlineTs: number }
   | { type: "round-result"; roundIndex: number; success: boolean }
   | { type: "game-over"; score: number; totalRounds: number }
-  | { type: "game-reset" };
+  | { type: "game-reset" }
+  | { type: "vase-tick"; phase: VasePhase; progress: number; integrity: number; instability: number }
+  | { type: "vase-result"; success: boolean }
+  | { type: "vase-reset" };
 
 export type DataChannelMessage = { kind: "tracking"; frame: TrackingFrame } | { kind: "game"; event: GameMessage };

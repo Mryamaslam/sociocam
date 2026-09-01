@@ -1,11 +1,17 @@
 import { io, type Socket } from "socket.io-client";
+import type { AvatarConfig } from "../../avatar/avatarOptions";
+import type { Point3 } from "../../types/tracking";
 
-const SIGNALING_URL = import.meta.env.VITE_SIGNALING_URL ?? "http://localhost:4000";
+// Undefined = same-origin (routed to the signaling server by the dev server's proxy —
+// see vite.config.ts). Only set VITE_SIGNALING_URL when the server truly lives on a
+// different host than the client (e.g. a real production deployment).
+const SIGNALING_URL = import.meta.env.VITE_SIGNALING_URL || undefined;
 
 export interface PeerProfile {
   userId: string;
   displayName: string;
-  avatarColor: string;
+  avatarConfig: AvatarConfig;
+  avatarUrl: string | null;
 }
 
 export interface RoomJoinResult {
@@ -51,6 +57,30 @@ export class SignalingClient {
 
   leaveRoom(): void {
     this.socket.emit("room:leave");
+  }
+
+  /** Reports only this client's own hand positions — the server decides hold/high-five state from both sides. */
+  sendHandUpdate(leftHand: Point3 | null, rightHand: Point3 | null): void {
+    this.socket.emit("hand:update", { leftHand, rightHand });
+  }
+
+  onInteractionState(cb: (holding: boolean) => void): void {
+    this.socket.on("interaction:state", ({ holding }) => cb(holding));
+  }
+
+  onHighFive(cb: () => void): void {
+    this.socket.on("interaction:high-five", cb);
+  }
+
+  /** Tells the server a cooperative-game round is starting. The server hands back a session id
+   * (broadcast to both players) that a later score submission must reference — see
+   * gameSessions.ts. Without this, a client could just POST an arbitrary score directly. */
+  startGameSession(): void {
+    this.socket.emit("game:session-start");
+  }
+
+  onGameSessionStarted(cb: (sessionId: string) => void): void {
+    this.socket.on("game:session-started", ({ sessionId }) => cb(sessionId));
   }
 
   dispose(): void {

@@ -14,15 +14,18 @@ interface RoomState {
   peerProfile: PeerProfile | null;
   isHost: boolean;
   error: string | null;
+  /** Authoritative — decided by the server from both sides' hand positions, never by this client alone. */
+  handsHolding: boolean;
 
   setPhase: (phase: AppPhase) => void;
   setRoomCode: (code: string | null) => void;
   setConnectionState: (state: ConnectionState) => void;
   setLocalFrame: (frame: TrackingFrame) => void;
-  setRemoteFrame: (frame: TrackingFrame) => void;
+  setRemoteFrame: (frame: TrackingFrame | null) => void;
   setPeerProfile: (profile: PeerProfile | null) => void;
   setIsHost: (isHost: boolean) => void;
   setError: (error: string | null) => void;
+  setHandsHolding: (holding: boolean) => void;
   reset: () => void;
 }
 
@@ -35,6 +38,7 @@ export const useRoomStore = create<RoomState>((set) => ({
   peerProfile: null,
   isHost: false,
   error: null,
+  handsHolding: false,
 
   setPhase: (phase) => set({ phase }),
   setRoomCode: (roomCode) => set({ roomCode }),
@@ -44,6 +48,7 @@ export const useRoomStore = create<RoomState>((set) => ({
   setPeerProfile: (peerProfile) => set({ peerProfile }),
   setIsHost: (isHost) => set({ isHost }),
   setError: (error) => set({ error }),
+  setHandsHolding: (handsHolding) => set({ handsHolding }),
   reset: () =>
     set({
       phase: "lobby",
@@ -54,5 +59,6 @@ export const useRoomStore = create<RoomState>((set) => ({
       peerProfile: null,
       isHost: false,
       error: null,
+      handsHolding: false,
     }),
 }));

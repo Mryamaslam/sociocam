@@ -6,8 +6,9 @@ export const LOCAL_AVATAR_POS: readonly [number, number, number] = [-0.7, 0, 0];
 export const REMOTE_AVATAR_POS: readonly [number, number, number] = [0.7, 0, 0];
 export const HOLD_HANDS_DISTANCE = 0.6;
 
-function handLifted(hand: HandState | null): boolean {
-  return !!hand?.present && hand.wrist.y < 0.4;
+function handRaised(hand: HandState | null): boolean {
+  // Stabilized gesture, not a raw instantaneous check — same reasoning as the smile check below.
+  return !!hand?.present && hand.gesture === "raised";
 }
 
 function handOpen(hand: HandState | null): boolean {
@@ -18,9 +19,12 @@ function frameSatisfiesSimpleGesture(frame: TrackingFrame | null, gesture: Exclu
   if (!frame) return false;
   switch (gesture) {
     case "smile":
-      return (frame.face?.mouthSmile ?? -1) > 0.35;
+      // Uses the stabilized discrete expression (not the raw continuous value) so a fleeting
+      // twitch of the mouth can't accidentally score a round — it has to hold long enough to
+      // actually be classified as a smile/laugh.
+      return frame.expression === "smile" || frame.expression === "laugh";
     case "raise-hand":
-      return handLifted(frame.leftHand) || handLifted(frame.rightHand);
+      return handRaised(frame.leftHand) || handRaised(frame.rightHand);
     case "open-palms":
       return handOpen(frame.leftHand) && handOpen(frame.rightHand);
   }

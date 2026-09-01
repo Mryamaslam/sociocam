@@ -6,3 +6,5 @@ server/data/
 .env.local
 *.log
 .DS_Store
+client/public/sample-avatars/
+*.tsbuildinfo

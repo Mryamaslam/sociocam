@@ -51,8 +51,11 @@ export class GameEngine {
     this.broadcast({ type: "round-start", roundIndex, totalRounds: GESTURE_SEQUENCE.length, gesture, deadlineTs });
 
     this.checkInterval = setInterval(() => {
-      const { localFrame, remoteFrame } = useRoomStore.getState();
-      if (bothSatisfyGesture(localFrame, remoteFrame, gesture)) {
+      const { localFrame, remoteFrame, handsHolding } = useRoomStore.getState();
+      // hold-hands is judged by the server's authoritative state, not this client's own
+      // proximity guess — a client (host included) can't just decide it happened.
+      const satisfied = gesture === "hold-hands" ? handsHolding : bothSatisfyGesture(localFrame, remoteFrame, gesture);
+      if (satisfied) {
         this.finishRound(roundIndex, true);
       }
     }, CHECK_INTERVAL_MS);

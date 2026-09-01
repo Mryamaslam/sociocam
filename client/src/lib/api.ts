@@ -1,12 +1,25 @@
-const API_BASE = import.meta.env.VITE_SIGNALING_URL ?? "http://localhost:4000";
+import type { AvatarConfig } from "../avatar/avatarOptions";
+
+// Empty string = same-origin, relative requests (routed to the signaling server by the
+// dev server's proxy — see vite.config.ts). Only set VITE_SIGNALING_URL when the server
+// truly lives on a different host than the client (e.g. a real production deployment).
+const API_BASE = import.meta.env.VITE_SIGNALING_URL ?? "";
 
 export interface Profile {
   id: string;
   username: string;
   displayName: string;
-  avatarColor: string;
+  avatarConfig: AvatarConfig;
+  /** Relative path to a realistic rigged GLB avatar the user uploaded, or null for the procedural fallback. */
+  avatarUrl: string | null;
   bestScore: number;
   gamesPlayed: number;
+}
+
+/** Resolves a profile's avatarUrl (a relative path from the server) against the API base, for
+ * passing straight to a GLTFLoader/useGLTF. */
+export function resolveAvatarUrl(avatarUrl: string): string {
+  return `${API_BASE}${avatarUrl}`;
 }
 
 export interface AuthResult {
@@ -14,9 +27,9 @@ export interface AuthResult {
   profile: Profile;
 }
 
-async function postJson<T>(path: string, body: unknown, token?: string): Promise<T> {
+async function requestJson<T>(method: string, path: string, body: unknown, token?: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
-    method: "POST",
+    method,
     headers: {
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -28,14 +41,61 @@ async function postJson<T>(path: string, body: unknown, token?: string): Promise
   return data as T;
 }
 
-export function register(input: { username: string; password: string; displayName: string; avatarColor: string }) {
-  return postJson<AuthResult>("/auth/register", input);
+export function register(input: { username: string; password: string; displayName: string; avatarConfig: AvatarConfig }) {
+  return requestJson<AuthResult>("POST", "/auth/register", input);
 }
 
 export function login(input: { username: string; password: string }) {
-  return postJson<AuthResult>("/auth/login", input);
+  return requestJson<AuthResult>("POST", "/auth/login", input);
 }
 
-export function submitGameResult(token: string, score: number) {
-  return postJson<{ profile: Profile }>("/api/game-result", { score }, token);
+// The server won't accept a score on one client's say-so — it holds submissions until BOTH
+// players in the session report, and only persists a matching pair. See gameSessions.ts.
+// "pending" means this client's own submission was recorded but the other player hasn't
+// reported yet; the profile update arrives once they do (their own submitGameResult call
+// triggers the accept on the server, but only the submitting request gets the response —
+// each client calls this itself, so each gets its own "accepted" response in turn).
+export function submitGameResult(token: string, sessionId: string, score: number) {
+  return requestJson<{ status: "pending" } | { profile: Profile }>("POST", "/api/game-result", { sessionId, score }, token);
+}
+
+export function updateProfile(token: string, patch: { displayName?: string; avatarConfig?: Partial<AvatarConfig> }) {
+  return requestJson<{ profile: Profile }>("PATCH", "/api/profile", patch, token);
+}
+
+export function logout(token: string) {
+  return requestJson<{ ok: boolean }>("POST", "/auth/logout", {}, token);
+}
+
+/** XMLHttpRequest, not fetch — fetch has no upload-progress event, and a multi-MB avatar file
+ * genuinely needs one (the spec calls for a real loading/progress state, not a spinner that
+ * means nothing). */
+export function uploadAvatar(token: string, file: File, onProgress?: (fraction: number) => void): Promise<{ profile: Profile }> {
+  return new Promise((resolve, reject) => {
+    const form = new FormData();
+    form.append("avatar", file);
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_BASE}/api/avatar`);
+    xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress?.(e.loaded / e.total);
+    };
+    xhr.onload = () => {
+      let data: any;
+      try {
+        data = JSON.parse(xhr.responseText);
+      } catch {
+        reject(new Error("Server returned an unexpected response"));
+        return;
+      }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      else reject(new Error(data.error ?? "Upload failed"));
+    };
+    xhr.onerror = () => reject(new Error("Network error during upload"));
+    xhr.send(form);
+  });
+}
+
+export function deleteAvatar(token: string) {
+  return requestJson<{ profile: Profile }>("DELETE", "/api/avatar", undefined, token);
 }

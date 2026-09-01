@@ -1,20 +1,22 @@
 import { useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
-import type { FaceState, HandState, PoseState } from "../types/tracking";
+import type { FaceState, HandState, PoseState, ExpressionLabel } from "../types/tracking";
 import { NEUTRAL_FACE } from "../types/tracking";
 import { HandRig } from "./HandRig";
 import { handWorldPosition } from "./handMapping";
+import { EXPRESSION_PRESETS } from "./expressionPresets";
+import type { AvatarConfig } from "./avatarOptions";
 
 interface AvatarRigProps {
   position: readonly [number, number, number];
   face: FaceState | null;
+  expression: ExpressionLabel;
   leftHand: HandState | null;
   rightHand: HandState | null;
   pose: PoseState | null;
-  color: string;
+  avatarConfig: AvatarConfig;
   facingSign: 1 | -1;
-  displayName?: string;
   highlightHands?: boolean;
 }
 
@@ -31,7 +33,7 @@ function updateLimb(mesh: THREE.Mesh, from: THREE.Vector3, to: THREE.Vector3) {
   mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
 }
 
-export function AvatarRig({ position, face, leftHand, rightHand, pose, color, facingSign, highlightHands }: AvatarRigProps) {
+export function AvatarRig({ position, face, expression, leftHand, rightHand, pose, avatarConfig, facingSign, highlightHands }: AvatarRigProps) {
   const bodyGroupRef = useRef<THREE.Group>(null);
   const headRef = useRef<THREE.Group>(null);
   const jawRef = useRef<THREE.Mesh>(null);
@@ -47,6 +49,7 @@ export function AvatarRig({ position, face, leftHand, rightHand, pose, color, fa
 
   useFrame((_, delta) => {
     const f = face ?? NEUTRAL_FACE;
+    const pose_ = EXPRESSION_PRESETS[expression];
     const smooth = 1 - Math.pow(0.001, delta); // frame-rate independent easing
 
     if (headRef.current) {
@@ -55,14 +58,17 @@ export function AvatarRig({ position, face, leftHand, rightHand, pose, color, fa
       headRef.current.rotation.z = lerp(headRef.current.rotation.z, f.headRoll * facingSign, smooth);
     }
     if (jawRef.current) {
-      const openAmount = 0.05 + f.mouthOpen * 0.22;
+      const openAmount = 0.05 + pose_.mouthOpen * 0.22;
       jawRef.current.scale.y = lerp(jawRef.current.scale.y, openAmount, smooth);
-      jawRef.current.position.y = lerp(jawRef.current.position.y, -0.32 - f.mouthOpen * 0.1, smooth);
+      jawRef.current.scale.x = lerp(jawRef.current.scale.x, 1 + pose_.mouthSmile * 0.35, smooth);
+      jawRef.current.position.y = lerp(jawRef.current.position.y, -0.32 - pose_.mouthOpen * 0.1 + pose_.mouthSmile * 0.02, smooth);
     }
+    // Eyes stay driven from raw per-eye values (not the expression preset) — blink/wink laterality
+    // (which eye) only exists in the raw signal; a preset can't say "the left eye" vs "the right eye".
     if (leftEyeRef.current) leftEyeRef.current.scale.y = lerp(leftEyeRef.current.scale.y, Math.max(0.05, f.leftEyeOpen), smooth);
     if (rightEyeRef.current) rightEyeRef.current.scale.y = lerp(rightEyeRef.current.scale.y, Math.max(0.05, f.rightEyeOpen), smooth);
-    if (leftBrowRef.current) leftBrowRef.current.position.y = lerp(leftBrowRef.current.position.y, 0.22 + f.eyebrowRaise * 0.08, smooth);
-    if (rightBrowRef.current) rightBrowRef.current.position.y = lerp(rightBrowRef.current.position.y, 0.22 + f.eyebrowRaise * 0.08, smooth);
+    if (leftBrowRef.current) leftBrowRef.current.position.y = lerp(leftBrowRef.current.position.y, 0.22 + pose_.eyebrowRaise * 0.08, smooth);
+    if (rightBrowRef.current) rightBrowRef.current.position.y = lerp(rightBrowRef.current.position.y, 0.22 + pose_.eyebrowRaise * 0.08, smooth);
 
     if (bodyGroupRef.current) {
       const lean = pose?.present ? pose.torsoLean * facingSign : 0;
@@ -94,50 +100,106 @@ export function AvatarRig({ position, face, leftHand, rightHand, pose, color, fa
     }
   });
 
+  const { skinColor, hairStyle, hairColor, eyeColor, clothingColor, accessory } = avatarConfig;
+
   return (
     <group position={position as [number, number, number]}>
       {/* arms are drawn in world space (siblings of the body group) since they connect to hands positioned in world space */}
       <mesh ref={leftArmRef}>
         <cylinderGeometry args={[0.035, 0.035, 1, 8]} />
-        <meshStandardMaterial color={color} />
+        <meshStandardMaterial color={skinColor} />
       </mesh>
       <mesh ref={rightArmRef}>
         <cylinderGeometry args={[0.035, 0.035, 1, 8]} />
-        <meshStandardMaterial color={color} />
+        <meshStandardMaterial color={skinColor} />
       </mesh>
 
       <group ref={bodyGroupRef}>
-        {/* body */}
+        {/* body / clothing */}
         <mesh position={[0, -0.9, 0]}>
           <capsuleGeometry args={[0.32, 0.6, 8, 16]} />
-          <meshStandardMaterial color={color} />
+          <meshStandardMaterial color={clothingColor} />
         </mesh>
 
         {/* head */}
         <group ref={headRef} position={[0, 0.05, 0]}>
           <mesh>
             <sphereGeometry args={[0.4, 32, 32]} />
-            <meshStandardMaterial color={color} />
+            <meshStandardMaterial color={skinColor} />
           </mesh>
+
+          {/* hair */}
+          {hairStyle !== "bald" && (
+            <mesh position={[0, 0.02, 0]}>
+              <sphereGeometry args={[0.42, 24, 16, 0, Math.PI * 2, 0, Math.PI * 0.55]} />
+              <meshStandardMaterial color={hairColor} />
+            </mesh>
+          )}
+          {hairStyle === "long" && (
+            <mesh position={[0, -0.15, -0.22]}>
+              <boxGeometry args={[0.4, 0.5, 0.12]} />
+              <meshStandardMaterial color={hairColor} />
+            </mesh>
+          )}
+          {hairStyle === "ponytail" && (
+            <mesh position={[0, 0.02, -0.42]} rotation={[Math.PI / 2.3, 0, 0]}>
+              <capsuleGeometry args={[0.06, 0.3, 4, 8]} />
+              <meshStandardMaterial color={hairColor} />
+            </mesh>
+          )}
+
+          {/* accessories — pushed well clear of the head sphere's surface (radius 0.4) so they
+              don't get swallowed by it; the sphere's surface recedes fast near the front, so
+              "clear of the surface at center" isn't clear of it a few cm to the side. */}
+          {accessory === "glasses" && (
+            <group position={[0, 0.05, 0.42]}>
+              <mesh position={[-0.15, 0, 0]}>
+                <torusGeometry args={[0.09, 0.025, 8, 16]} />
+                <meshStandardMaterial color="#1a1a1a" />
+              </mesh>
+              <mesh position={[0.15, 0, 0]}>
+                <torusGeometry args={[0.09, 0.025, 8, 16]} />
+                <meshStandardMaterial color="#1a1a1a" />
+              </mesh>
+              <mesh position={[0, 0, 0]}>
+                <boxGeometry args={[0.12, 0.02, 0.02]} />
+                <meshStandardMaterial color="#1a1a1a" />
+              </mesh>
+            </group>
+          )}
+          {accessory === "hat" && (
+            // Brim rests right at the head's top surface (y=0.4 in this local space); the cone
+            // rises from there, instead of being centered on the head and mostly buried in it.
+            <group position={[0, 0.42, 0]}>
+              <mesh position={[0, 0.15, 0]}>
+                <coneGeometry args={[0.26, 0.3, 16]} />
+                <meshStandardMaterial color={clothingColor} />
+              </mesh>
+              <mesh>
+                <cylinderGeometry args={[0.36, 0.36, 0.04, 16]} />
+                <meshStandardMaterial color={clothingColor} />
+              </mesh>
+            </group>
+          )}
 
           {/* eyes */}
           <mesh ref={leftEyeRef} position={[-0.15, 0.05, 0.35]}>
             <sphereGeometry args={[0.06, 16, 16]} />
-            <meshStandardMaterial color="#1a1a1a" />
+            <meshStandardMaterial color={eyeColor} />
           </mesh>
           <mesh ref={rightEyeRef} position={[0.15, 0.05, 0.35]}>
             <sphereGeometry args={[0.06, 16, 16]} />
-            <meshStandardMaterial color="#1a1a1a" />
+            <meshStandardMaterial color={eyeColor} />
           </mesh>
 
           {/* eyebrows */}
           <mesh ref={leftBrowRef} position={[-0.15, 0.22, 0.36]}>
             <boxGeometry args={[0.14, 0.03, 0.03]} />
-            <meshStandardMaterial color="#3a2a1a" />
+            <meshStandardMaterial color={hairColor} />
           </mesh>
           <mesh ref={rightBrowRef} position={[0.15, 0.22, 0.36]}>
             <boxGeometry args={[0.14, 0.03, 0.03]} />
-            <meshStandardMaterial color="#3a2a1a" />
+            <meshStandardMaterial color={hairColor} />
           </mesh>
 
           {/* jaw / mouth */}
