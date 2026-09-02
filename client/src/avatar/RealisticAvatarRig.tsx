@@ -6,7 +6,7 @@ import { SkeletonUtils } from "three-stdlib";
 import type { ExpressionLabel, FaceState, HandState, PoseState } from "../types/tracking";
 import { NEUTRAL_FACE } from "../types/tracking";
 import { EXPRESSION_PRESETS } from "./expressionPresets";
-import { handWorldPosition } from "./handMapping";
+import { handWorldPosition, pointWorldPosition } from "./handMapping";
 
 interface RealisticAvatarRigProps {
   url: string;
@@ -90,6 +90,54 @@ function aimBoneAt(bone: THREE.Object3D, restChildDir: THREE.Vector3, targetWorl
   const localDir = worldDir.clone().applyQuaternion(parentQuatWorld.clone().invert()).normalize();
   const targetQuat = new THREE.Quaternion().setFromUnitVectors(restChildDir, localDir);
   bone.quaternion.slerp(targetQuat, amount);
+}
+
+// Direction (not a magnitude — aimBoneAt only cares about the normalized direction from the
+// bone to the target, so this works regardless of a given avatar's actual arm length or scale)
+// for a natural standing rest pose: hanging down at the side, a little forward of straight down.
+// Most uploaded GLBs' raw rest pose is a T-pose or A-pose — a convention for animation retargeting,
+// not something that reads as a person standing still — so without tracked hand data the arm
+// should relax to this instead of staying held out horizontally.
+const ARM_REST_OFFSET = new THREE.Vector3(0, -1, 0.15);
+
+/**
+ * Drives a shoulder+forearm pair as an actual two-joint chain using the REAL tracked elbow
+ * position, not a guess: the shoulder aims at the elbow, then (after propagating that rotation
+ * down via updateWorldMatrix — react-three-fiber doesn't recompute world matrices until the
+ * render pass, so reading the forearm's world position before this would use last frame's stale
+ * shoulder orientation) the forearm aims at the hand from the elbow's now-current position. This
+ * produces a genuine elbow bend, unlike aiming one rigid bone straight at the hand.
+ *
+ * Falls back to the old single-target approximation when the elbow reading isn't available this
+ * frame (pose tracking momentarily lost while hand tracking isn't) — degraded, not broken. With
+ * no hand tracked at all, relaxes toward the natural rest pose above instead of doing nothing.
+ */
+function driveArm(
+  shoulderBone: THREE.Object3D | null,
+  shoulderRestDir: THREE.Vector3,
+  foreArmBone: THREE.Object3D | null,
+  foreArmRestDir: THREE.Vector3,
+  elbowWorld: THREE.Vector3 | null,
+  handWorld: THREE.Vector3 | null,
+  amount: number
+) {
+  if (!shoulderBone) return;
+  if (!handWorld) {
+    const restTarget = shoulderBone.getWorldPosition(new THREE.Vector3()).add(ARM_REST_OFFSET);
+    aimBoneAt(shoulderBone, shoulderRestDir, restTarget, amount);
+    shoulderBone.updateWorldMatrix(true, false);
+    if (foreArmBone) aimBoneAt(foreArmBone, foreArmRestDir, restTarget, amount);
+    return;
+  }
+  if (elbowWorld) {
+    aimBoneAt(shoulderBone, shoulderRestDir, elbowWorld, amount);
+    shoulderBone.updateWorldMatrix(true, false);
+    if (foreArmBone) aimBoneAt(foreArmBone, foreArmRestDir, handWorld, amount);
+  } else {
+    aimBoneAt(shoulderBone, shoulderRestDir, handWorld, amount);
+    shoulderBone.updateWorldMatrix(true, false);
+    if (foreArmBone) aimBoneAt(foreArmBone, foreArmRestDir, handWorld, amount * 0.5);
+  }
 }
 
 export function RealisticAvatarRig({ url, position, face, expression, leftHand, rightHand, pose, facingSign, highlightHands }: RealisticAvatarRigProps) {
@@ -194,26 +242,22 @@ export function RealisticAvatarRig({ url, position, face, expression, leftHand, 
     }
 
     const aimAmount = 1 - Math.pow(0.0001, delta);
-    if (leftShoulderBone && leftHand?.present) {
-      const target = new THREE.Vector3(...handWorldPosition(position, leftHand));
-      aimBoneAt(leftShoulderBone, leftShoulderRestDir, target, aimAmount);
-      // Forearm follows the same target at reduced strength — a rough stand-in for an elbow
-      // bend (no real elbow position exists in hand-only tracking to aim at directly), so the
-      // arm reads as a jointed limb reaching for the hand rather than one rigid rod.
-      if (leftForeArmBone) aimBoneAt(leftForeArmBone, leftForeArmRestDir, target, aimAmount * 0.5);
-    }
-    if (rightShoulderBone && rightHand?.present) {
-      const target = new THREE.Vector3(...handWorldPosition(position, rightHand));
-      aimBoneAt(rightShoulderBone, rightShoulderRestDir, target, aimAmount);
-      if (rightForeArmBone) aimBoneAt(rightForeArmBone, rightForeArmRestDir, target, aimAmount * 0.5);
-    }
+    const leftHandTarget = leftHand?.present ? new THREE.Vector3(...handWorldPosition(position, leftHand)) : null;
+    const rightHandTarget = rightHand?.present ? new THREE.Vector3(...handWorldPosition(position, rightHand)) : null;
+    const leftElbowTarget = pose?.present ? new THREE.Vector3(...pointWorldPosition(position, pose.leftElbow)) : null;
+    const rightElbowTarget = pose?.present ? new THREE.Vector3(...pointWorldPosition(position, pose.rightElbow)) : null;
+    driveArm(leftShoulderBone, leftShoulderRestDir, leftForeArmBone, leftForeArmRestDir, leftElbowTarget, leftHandTarget, aimAmount);
+    driveArm(rightShoulderBone, rightShoulderRestDir, rightForeArmBone, rightForeArmRestDir, rightElbowTarget, rightHandTarget, aimAmount);
 
-    // Per-finger curl — direct rotation proportional to curl, not full IK. Bend axis is a
-    // reasonable default (local X); exact convention varies by rig, so this is an approximation
-    // (see README known gaps), not anatomically exact across every possible uploaded avatar.
+    // Per-finger bend — prefers Kalidokit's geometrically-solved proximal-joint angle
+    // (`fingerBend`) when this frame has one, falling back to the coarser distance-heuristic
+    // `fingerCurl` otherwise (manual-mode frames, or a hand shape Kalidokit couldn't solve).
+    // Bend axis is still a reasonable default (local X) rather than measured per-rig — see
+    // README known gaps — but the bend AMOUNT itself is now real geometry, not a guess.
     const applyCurl = (chains: THREE.Object3D[][], hand: HandState | null) => {
       if (!hand?.present) return;
-      const curls = [hand.fingerCurl.index, hand.fingerCurl.middle, hand.fingerCurl.ring, hand.fingerCurl.pinky];
+      const bend = hand.fingerBend ?? hand.fingerCurl;
+      const curls = [bend.index, bend.middle, bend.ring, bend.pinky];
       chains.forEach((chain, i) => {
         const angle = curls[i] * 1.1;
         for (const bone of chain) bone.rotation.x = THREE.MathUtils.lerp(bone.rotation.x, angle, aimAmount);

@@ -34,6 +34,7 @@ export function buildManualFrame(expression: ExpressionLabel, gesture: HandGestu
               : gesture === "grab"
                 ? { index: 0.9, middle: 0.9, ring: 0.9, pinky: 0.9 }
                 : { index: 0.15, middle: 0.15, ring: 0.15, pinky: 0.15 },
+          fingerBend: null,
           gesture,
         };
 

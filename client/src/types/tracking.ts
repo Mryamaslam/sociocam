@@ -31,6 +31,15 @@ export interface HandState {
   curl: number;
   /** per-finger curl, 0 (straight) .. 1 (curled) — needed to tell "point" (index out, rest curled) from a fist */
   fingerCurl: { index: number; middle: number; ring: number; pinky: number };
+  /**
+   * Real per-finger proximal-joint bend angle (radians), from Kalidokit's geometric solve over
+   * the actual 3D hand landmarks — used only to drive the realistic avatar's finger bones with a
+   * physically-derived angle instead of the coarser `fingerCurl` distance heuristic above.
+   * `fingerCurl` stays untouched by this (the gesture classifier is tuned against it); this is a
+   * purely additive, optional channel. Null when Kalidokit couldn't solve this frame (manual-mode
+   * frames have no real landmarks at all) — consumers fall back to `fingerCurl` in that case.
+   */
+  fingerBend: { index: number; middle: number; ring: number; pinky: number } | null;
   /** Stabilized discrete gesture — see lib/tracking/handGestureClassifier.ts */
   gesture: HandGestureLabel;
 }
@@ -39,6 +48,11 @@ export interface PoseState {
   present: boolean;
   leftShoulder: Point3;
   rightShoulder: Point3;
+  /** Real tracked elbow position (not derived/guessed) — lets a rig aim the upper arm at the
+   * elbow and the forearm at the hand separately, producing an actual elbow bend instead of one
+   * rigid bone pointing straight at the hand. */
+  leftElbow: Point3;
+  rightElbow: Point3;
   /** -1 (leaning fully left) .. 1 (leaning fully right), from shoulder-midpoint vs hip-midpoint */
   torsoLean: number;
 }

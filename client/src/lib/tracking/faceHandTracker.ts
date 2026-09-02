@@ -3,13 +3,43 @@ import {
   HandLandmarker,
   PoseLandmarker,
   FilesetResolver,
+  type Landmark,
   type NormalizedLandmark,
 } from "@mediapipe/tasks-vision";
+import { Hand as KalidokitHand } from "kalidokit";
 import type { FaceState, HandState, PoseState, TrackingFrame } from "../../types/tracking";
 import { blendshapeScore, clamp01, type BlendshapeCategory } from "./blendshapeUtils";
 import { ExpressionStabilizer } from "./expressionClassifier";
 import { HandGestureClassifier } from "./handGestureClassifier";
 import { MovementEnergyTracker } from "./movementEnergy";
+
+/** Kalidokit's proximal-joint angles come out in radians, roughly 0 (straight) .. ~1.6 (fully
+ * curled) per its own geometric convention — normalize to this app's existing 0..1 curl scale so
+ * `fingerBend` is a drop-in replacement for `fingerCurl` wherever a consumer wants the more
+ * accurate value, not a differently-scaled number. */
+function normalizeBendAngle(radians: number): number {
+  return clamp01(radians / 1.6);
+}
+
+/** Runs Kalidokit's geometric hand solver over real 3D (world-space) landmarks and reduces its
+ * detailed per-phalange output down to one proximal-joint bend per finger — the single biggest,
+ * most visible joint, and the natural analog of the existing coarse `fingerCurl` value. Returns
+ * null if Kalidokit can't solve this hand shape (e.g. a partially-occluded hand), so callers can
+ * fall back to the distance-heuristic `fingerCurl` instead of showing a broken value. */
+function solveFingerBend(worldLandmarks: Landmark[], side: "Left" | "Right"): HandState["fingerBend"] {
+  const solved = KalidokitHand.solve(worldLandmarks, side);
+  if (!solved) return null;
+  const get = (key: string) => {
+    const joint = (solved as Record<string, { z: number } | undefined>)[`${side}${key}`];
+    return joint ? normalizeBendAngle(Math.abs(joint.z)) : 0;
+  };
+  return {
+    index: get("IndexProximal"),
+    middle: get("MiddleProximal"),
+    ring: get("RingProximal"),
+    pinky: get("LittleProximal"),
+  };
+}
 
 const WASM_BASE = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.20/wasm";
 const FACE_MODEL_URL =
@@ -31,7 +61,13 @@ function fingerCurl(landmarks: NormalizedLandmark[], mcpIdx: number, tipIdx: num
   return clamp01(1 - tipDist / (mcpDist * 2.2));
 }
 
-function buildHandState(landmarks: NormalizedLandmark[], classifier: HandGestureClassifier, now: number): HandState {
+function buildHandState(
+  landmarks: NormalizedLandmark[],
+  worldLandmarks: Landmark[] | undefined,
+  side: "Left" | "Right",
+  classifier: HandGestureClassifier,
+  now: number
+): HandState {
   const wrist = landmarks[0];
   const fingerCurlValues = {
     index: fingerCurl(landmarks, 5, 8),
@@ -49,6 +85,7 @@ function buildHandState(landmarks: NormalizedLandmark[], classifier: HandGesture
     wrist: { x: wrist.x, y: wrist.y, z: wrist.z ?? 0 },
     curl,
     fingerCurl: fingerCurlValues,
+    fingerBend: worldLandmarks ? solveFingerBend(worldLandmarks, side) : null,
     gesture,
   };
 }
@@ -56,6 +93,8 @@ function buildHandState(landmarks: NormalizedLandmark[], classifier: HandGesture
 // BlazePose landmark indices, subject's own left/right (mirrored on a selfie camera).
 const POSE_LEFT_SHOULDER = 11;
 const POSE_RIGHT_SHOULDER = 12;
+const POSE_LEFT_ELBOW = 13;
+const POSE_RIGHT_ELBOW = 14;
 const POSE_LEFT_HIP = 23;
 const POSE_RIGHT_HIP = 24;
 
@@ -63,6 +102,8 @@ function poseStateFromLandmarks(landmarks: NormalizedLandmark[]): PoseState {
   // Swap left/right the same way hands are swapped, so the avatar's left arm matches the user's raised arm.
   const subjectLeftShoulder = landmarks[POSE_LEFT_SHOULDER];
   const subjectRightShoulder = landmarks[POSE_RIGHT_SHOULDER];
+  const subjectLeftElbow = landmarks[POSE_LEFT_ELBOW];
+  const subjectRightElbow = landmarks[POSE_RIGHT_ELBOW];
   const leftHip = landmarks[POSE_LEFT_HIP];
   const rightHip = landmarks[POSE_RIGHT_HIP];
 
@@ -75,6 +116,8 @@ function poseStateFromLandmarks(landmarks: NormalizedLandmark[]): PoseState {
     present: true,
     leftShoulder: { x: subjectRightShoulder.x, y: subjectRightShoulder.y, z: subjectRightShoulder.z ?? 0 },
     rightShoulder: { x: subjectLeftShoulder.x, y: subjectLeftShoulder.y, z: subjectLeftShoulder.z ?? 0 },
+    leftElbow: { x: subjectRightElbow.x, y: subjectRightElbow.y, z: subjectRightElbow.z ?? 0 },
+    rightElbow: { x: subjectLeftElbow.x, y: subjectLeftElbow.y, z: subjectLeftElbow.z ?? 0 },
     torsoLean,
   };
 }
@@ -148,13 +191,17 @@ export class FaceHandTracker {
       };
 
       handResult.handednesses?.forEach((handedness, i) => {
-        const label = handedness[0]?.categoryName; // "Left" | "Right" (mirrored: camera view)
+        const label = handedness[0]?.categoryName as "Left" | "Right" | undefined; // MediaPipe's own
+        // label: the REAL anatomical chirality of this landmark set (mirrored camera view) — Kalidokit
+        // needs this exact value to correctly interpret thumb-side vs. pinky-side geometry, which is
+        // independent of which avatar-facing slot (frame.leftHand/rightHand) this ends up stored in below.
         const landmarks = handResult.landmarks[i];
-        if (!landmarks) return;
+        if (!landmarks || !label) return;
+        const worldLandmarks = handResult.worldLandmarks?.[i];
         if (label === "Left") {
-          frame.rightHand = buildHandState(landmarks, this.rightHandGesture, now); // mirror for selfie view
+          frame.rightHand = buildHandState(landmarks, worldLandmarks, label, this.rightHandGesture, now); // mirror for selfie view
         } else {
-          frame.leftHand = buildHandState(landmarks, this.leftHandGesture, now);
+          frame.leftHand = buildHandState(landmarks, worldLandmarks, label, this.leftHandGesture, now);
         }
       });
 
