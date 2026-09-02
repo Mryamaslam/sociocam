@@ -208,6 +208,261 @@ input:focus {
   overflow: hidden;
 }
 
+/* ---- Auth screen: a real landing pitch next to the form, not just a bare login box ---- */
+.auth-screen {
+  height: 100%;
+  width: 100%;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
+  align-items: center;
+  gap: var(--space-6);
+  padding: var(--space-6) var(--space-6);
+  animation: fade-in var(--dur-slow) var(--ease-out) both;
+}
+
+@media (max-width: 860px) {
+  .auth-screen {
+    grid-template-columns: 1fr;
+    padding: var(--space-5) var(--space-4);
+    gap: var(--space-5);
+  }
+}
+
+.auth-hero {
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-width: 520px;
+  animation: fade-in-up var(--dur-slow) var(--ease-out) both;
+}
+
+@media (max-width: 860px) {
+  .auth-hero {
+    text-align: center;
+    align-items: center;
+    max-width: none;
+  }
+}
+
+.auth-hero__eyebrow {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-accent);
+  margin: 0;
+}
+
+.auth-hero__title {
+  font-size: 42px;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  background: linear-gradient(135deg, var(--color-text) 40%, var(--color-accent) 120%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.auth-hero__tagline {
+  color: var(--color-text-muted);
+  font-size: 16px;
+  line-height: 1.55;
+  margin: 0;
+  max-width: 46ch;
+}
+
+/* Two avatar "blobs" gently floating with a pulsing connection between them — an abstract
+ * stand-in for "two real people, live, in one room" that needs no photography/illustration
+ * assets, drawn entirely from the existing brand tokens. */
+.auth-visual {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-2) 0;
+}
+
+@media (max-width: 860px) {
+  .auth-visual {
+    justify-content: center;
+  }
+}
+
+.auth-visual__avatar {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.35), transparent 45%),
+    linear-gradient(145deg, var(--color-accent), var(--color-accent-strong));
+  box-shadow: 0 6px 20px rgba(47, 215, 196, 0.25);
+  animation: avatar-float 3.6s ease-in-out infinite;
+}
+
+.auth-visual__avatar--b {
+  animation-delay: 1.3s;
+  background: radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.3), transparent 45%),
+    linear-gradient(145deg, #7fd7ce, var(--color-accent));
+}
+
+@keyframes avatar-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+
+.auth-visual__link {
+  position: relative;
+  flex: 1;
+  max-width: 90px;
+  height: 2px;
+  background: linear-gradient(90deg, var(--color-accent), transparent, var(--color-accent));
+  background-size: 200% 100%;
+  border-radius: var(--radius-pill);
+  overflow: visible;
+}
+
+.auth-visual__pulse {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  box-shadow: 0 0 8px 2px rgba(47, 215, 196, 0.6);
+  transform: translateY(-50%);
+  animation: pulse-travel 2.2s ease-in-out infinite;
+}
+
+@keyframes pulse-travel {
+  0%, 100% { left: 0; opacity: 0; }
+  10% { opacity: 1; }
+  50% { left: calc(100% - 6px); opacity: 1; }
+  60% { opacity: 0; }
+}
+
+.auth-hero__features {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.auth-hero__features li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  text-align: left;
+}
+
+.auth-hero__features strong {
+  display: block;
+  font-family: var(--font-heading);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--color-text);
+  margin-bottom: 2px;
+}
+
+.auth-hero__features span {
+  display: block;
+  font-size: 13px;
+  color: var(--color-text-muted);
+  line-height: 1.45;
+}
+
+.auth-hero__feature-icon {
+  position: relative;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  background: rgba(47, 215, 196, 0.1);
+  border: 1px solid rgba(47, 215, 196, 0.25);
+  overflow: hidden;
+}
+
+.auth-hero__feature-icon::before,
+.auth-hero__feature-icon::after {
+  content: "";
+  position: absolute;
+}
+
+/* "expression" — a simple smiling arc */
+.auth-hero__feature-icon[data-icon="expression"]::before {
+  width: 16px;
+  height: 16px;
+  left: 50%;
+  top: 45%;
+  border: 2px solid var(--color-accent);
+  border-top-color: transparent;
+  border-left-color: transparent;
+  border-right-color: transparent;
+  border-radius: 50%;
+  transform: translate(-50%, -50%) rotate(0deg);
+}
+
+/* "avatar" — a tiny head-and-shoulders glyph */
+.auth-hero__feature-icon[data-icon="avatar"]::before {
+  width: 10px;
+  height: 10px;
+  left: 50%;
+  top: 32%;
+  background: var(--color-accent);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.auth-hero__feature-icon[data-icon="avatar"]::after {
+  width: 20px;
+  height: 12px;
+  left: 50%;
+  bottom: 6px;
+  background: var(--color-accent);
+  border-radius: 10px 10px 0 0;
+  transform: translateX(-50%);
+  opacity: 0.85;
+}
+
+/* "privacy" — a tiny padlock glyph */
+.auth-hero__feature-icon[data-icon="privacy"]::before {
+  width: 12px;
+  height: 9px;
+  left: 50%;
+  bottom: 9px;
+  background: var(--color-accent);
+  border-radius: 2px;
+  transform: translateX(-50%);
+}
+
+.auth-hero__feature-icon[data-icon="privacy"]::after {
+  width: 10px;
+  height: 10px;
+  left: 50%;
+  bottom: 15px;
+  border: 2px solid var(--color-accent);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  transform: translateX(-50%);
+}
+
+.auth-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  text-align: center;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel);
+  padding: var(--space-5);
+  animation: modal-in var(--dur-slow) var(--ease-spring) both;
+}
+
 .camera-preview {
   position: absolute;
   bottom: var(--space-4);

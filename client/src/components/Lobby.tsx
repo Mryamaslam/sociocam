@@ -42,7 +42,7 @@ export function Lobby({ onCreate, onJoin, error, busy, waitingRoomCode, initialJ
   return (
     <div className="lobby">
       <h1>Camera Social World</h1>
-      <p className="lobby__subtitle">Phase A — Core Magic: two people, one room, real expressions.</p>
+      <p className="lobby__subtitle">Create a private room, or join one your friend already started.</p>
 
       <div className="lobby__card">
         <button disabled={busy} onClick={onCreate}>
